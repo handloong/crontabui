@@ -781,18 +781,8 @@ select:focus {
   font-size: 19px;
 }
 
-.auth-head p {
-  color: var(--text-dim);
-  font-size: 13px;
-}
-
-/* 登录页版本号：小号、弱化，数字用等宽便于对齐 */
-.auth-head p.auth-version {
-  color: var(--text-faint);
-  font-size: 12px;
-}
-
-.auth-version .ver-num {
+/* 版本号数字：等宽、稍亮，与周围的弱化文案形成层次 */
+.ver-num {
   color: var(--text-dim);
   font-family: var(--mono);
   font-weight: 600;

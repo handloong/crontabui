@@ -252,10 +252,26 @@ func TestPageVersionInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("登录页含功能简介", func(t *testing.T) {
+	t.Run("登录页版本号只出现在页脚一次", func(t *testing.T) {
 		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
-		if !strings.Contains(body, "可视化管理器") {
-			t.Errorf("登录页缺少功能简介")
+		if !strings.Contains(body, "Linux crontab 可视化管理器") {
+			t.Errorf("登录页底部缺少产品名")
+		}
+		// 页头不再展示版本号，整页只保留页脚这一处
+		if n := strings.Count(body, testVersion); n != 1 {
+			t.Errorf("登录页版本号出现 %d 次，want 1（仅页脚）", n)
+		}
+		if strings.Contains(body, "auth-version") {
+			t.Errorf("登录页页头的版本号元素未移除")
+		}
+	})
+
+	t.Run("已移除的功能描述不再出现", func(t *testing.T) {
+		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
+		for _, gone := range []string{"一键启用停用", "系统 cron 日志", "查看 / 新增 / 编辑 / 删除"} {
+			if strings.Contains(body, gone) {
+				t.Errorf("登录页仍包含应移除的功能描述：%q", gone)
+			}
 		}
 	})
 
