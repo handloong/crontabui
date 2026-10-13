@@ -170,7 +170,11 @@
             <span>自动刷新（5 秒）</span>
           </label>
         </div>
-        <button class="btn btn-ghost btn-mini" type="button" id="btn-log-reload">重新加载</button>
+        <div class="log-toolbar-right">
+          <button class="btn btn-ghost btn-mini" type="button" id="btn-log-export" hidden>导出</button>
+          <button class="btn btn-danger btn-mini" type="button" id="btn-log-clear" hidden>删除</button>
+          <button class="btn btn-ghost btn-mini" type="button" id="btn-log-reload">重新加载</button>
+        </div>
       </div>
       <div class="log-meta" id="log-meta"></div>
       <pre class="log-view" id="log-view"></pre>

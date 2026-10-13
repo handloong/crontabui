@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -428,6 +429,159 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request) {
 		"content": content,
 		"lines":   lines,
 	})
+}
+
+// handleJobLogDownload 以附件形式返回该任务日志的**完整原始文件**。
+//
+// 与查看接口不同，这里刻意不做行数截断：导出的语义就是「拿到整份日志」。
+// 路径一律由 Job.LogFile(logDir) 推导，不接受任何外部传入的路径参数。
+func (s *Server) handleJobLogDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	job, err := s.opts.Store.Get(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	path := job.LogFile(s.opts.LogDir)
+
+	f, err := openLogFile(path)
+	if err != nil {
+		s.failLogError(w, err, path)
+		return
+	}
+	defer f.Close()
+
+	name := logFileName(job)
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Content-Disposition", contentDisposition(name))
+	// 供前端直接取用的文件名（同源请求可读自定义头），避免前后端各拼一套。
+	h.Set("X-Log-Filename", encodeRFC5987(name))
+	h.Set("Cache-Control", "no-store")
+	if _, err := io.Copy(w, f); err != nil {
+		// 响应已开始写出，无法再改状态码，只能记录。
+		s.logger.Warn("写出日志文件中断", "id", id, "err", err)
+	}
+}
+
+// handleJobLogClear 清空任务日志内容（保留文件，见 logview.Truncate 的说明）。
+func (s *Server) handleJobLogClear(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	job, err := s.opts.Store.Get(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	path := job.LogFile(s.opts.LogDir)
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		s.failLogError(w, err, path)
+		return
+	}
+	if fi.IsDir() {
+		s.fail(w, fmt.Errorf("%s 是目录，不是日志文件", path))
+		return
+	}
+
+	freed := fi.Size()
+	if err := logview.Truncate(path); err != nil {
+		s.failLogError(w, err, path)
+		return
+	}
+	s.logger.Info("已清空任务日志", "id", id, "file", path, "freed", freed)
+	writeData(w, map[string]any{"id": id, "file": path, "freed": freed})
+}
+
+// openLogFile 打开日志文件并确认它不是目录。
+func openLogFile(path string) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if fi.IsDir() {
+		f.Close()
+		return nil, fmt.Errorf("%s 是目录，不是日志文件", path)
+	}
+	return f, nil
+}
+
+// failLogError 把日志文件操作的常见错误映射为可读提示。
+func (s *Server) failLogError(w http.ResponseWriter, err error, path string) {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		writeError(w, http.StatusNotFound, "该任务还没有日志文件；请先在任务里勾选「捕获输出」，并等它执行过一次")
+	case errors.Is(err, os.ErrPermission):
+		writeError(w, http.StatusForbidden, "没有权限访问 "+path)
+	default:
+		s.fail(w, err)
+	}
+}
+
+// logFileName 拼出建议的下载文件名：<任务名或ID>-YYYYMMDD-HHmmss.log
+func logFileName(job crontab.Job) string {
+	label := sanitizeFileName(job.Name)
+	if label == "" {
+		label = job.ID
+	}
+	// 按 rune 截断，避免把多字节字符切成半个。
+	if r := []rune(label); len(r) > 60 {
+		label = string(r[:60])
+	}
+	return label + "-" + time.Now().Format("20060102-150405") + ".log"
+}
+
+// sanitizeFileName 去掉路径分隔符、控制字符等不适合出现在文件名里的字符。
+func sanitizeFileName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			// 控制字符：包含 CR/LF，绝不能进 HTTP 头
+		case strings.ContainsRune(`/\:*?"<>|`, r):
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// contentDisposition 生成 RFC 6266 的附件头。
+// 非 ASCII 文件名（中文任务名）放进 filename*，同时给一个 ASCII 兜底名。
+func contentDisposition(filename string) string {
+	ascii := make([]rune, 0, len(filename))
+	for _, r := range filename {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			ascii = append(ascii, '_')
+			continue
+		}
+		ascii = append(ascii, r)
+	}
+	return `attachment; filename="` + string(ascii) + `"; filename*=UTF-8''` + encodeRFC5987(filename)
+}
+
+// encodeRFC5987 按 RFC 5987 的 attr-char 集合做百分号编码（逐字节，兼容 UTF-8）。
+func encodeRFC5987(s string) string {
+	const attrChar = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case strings.IndexByte(attrChar, c) >= 0:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 func (s *Server) handleSystemLog(w http.ResponseWriter, r *http.Request) {

@@ -99,6 +99,8 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("POST /api/jobs/{id}/toggle", s.handleToggleJob)
 	mux.HandleFunc("POST /api/jobs/{id}/run", s.handleRunJob)
 	mux.HandleFunc("GET /api/jobs/{id}/log", s.handleJobLog)
+	mux.HandleFunc("GET /api/jobs/{id}/log/download", s.handleJobLogDownload)
+	mux.HandleFunc("DELETE /api/jobs/{id}/log", s.handleJobLogClear)
 	mux.HandleFunc("GET /api/logs/system", s.handleSystemLog)
 	mux.HandleFunc("GET /api/logs/files", s.handleLogFiles)
 	mux.HandleFunc("GET /api/validate", s.handleValidate)

@@ -45,6 +45,8 @@
     logTitle: document.getElementById('log-dialog-title'),
     logClose: document.getElementById('btn-log-close'),
     logReload: document.getElementById('btn-log-reload'),
+    logExport: document.getElementById('btn-log-export'),
+    logClear: document.getElementById('btn-log-clear'),
     logTabs: document.getElementById('log-tabs'),
     logLines: document.getElementById('log-lines'),
     logAuto: document.getElementById('log-auto'),
@@ -310,6 +312,14 @@
       var active = tabs[i].getAttribute('data-tab') === state.logTab;
       tabs[i].className = active ? 'tab is-active' : 'tab';
     }
+    // 导出/删除只对「任务日志」有意义：系统 cron 日志由 syslog/journald 维护，
+    // 本程序只读——既不该在界面里删它，导出也算不上「导出本程序的产物」。
+    var isJobLog = state.logTab === 'job' && !!state.logJobId;
+    el.logExport.hidden = !isJobLog;
+    el.logClear.hidden = !isJobLog;
+    // 切页时先放开，再由 loadLog 依据文件是否存在决定是否禁用
+    el.logExport.disabled = false;
+    el.logClear.disabled = false;
   }
 
   function loadLog() {
@@ -336,6 +346,12 @@
         el.logView.textContent = data.message;
         return;
       }
+      if (state.logTab === 'job') {
+        // 文件还不存在时禁用导出/删除，避免点了才报错
+        var missing = data.exists === false;
+        el.logExport.disabled = missing;
+        el.logClear.disabled = missing;
+      }
       var content = data.content || '';
       if (!content) {
         el.logView.textContent = state.logTab === 'system'
@@ -348,6 +364,68 @@
     }).catch(function (err) {
       el.logView.textContent = err.message;
     });
+  }
+
+  // 导出走 fetch + Blob，而不是直接跳转下载地址：
+  // 这样失败时能拿到 JSON 里的中文错误提示，页面也不会被导航走。
+  function exportLog() {
+    if (!state.logJobId) { return; }
+    var url = '/api/jobs/' + encodeURIComponent(state.logJobId) + '/log/download';
+    el.logExport.disabled = true;
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.replace('/login');
+          throw new Error('会话已过期');
+        }
+        if (!res.ok) {
+          return res.json().catch(function () { return null; }).then(function (payload) {
+            throw new Error((payload && payload.error) || ('导出失败（HTTP ' + res.status + '）'));
+          });
+        }
+        return res.blob().then(function (blob) {
+          return { blob: blob, name: res.headers.get('X-Log-Filename') || '' };
+        });
+      })
+      .then(function (got) {
+        var name = safeDecode(got.name) || ('log-' + state.logJobId + '.log');
+        var href = URL.createObjectURL(got.blob);
+        var a = document.createElement('a');
+        a.href = href;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // 下载是异步启动的，立刻 revoke 可能让下载拿不到数据
+        setTimeout(function () { URL.revokeObjectURL(href); }, 10000);
+        toast('已导出 ' + name, 'ok');
+      })
+      .catch(function (err) { toast(err.message, 'error'); })
+      .then(function () { el.logExport.disabled = false; });
+  }
+
+  function clearLog() {
+    if (!state.logJobId) { return; }
+    var job = findJob(state.logJobId);
+    var label = (job && job.name) || ('#' + state.logJobId);
+    if (!window.confirm('确定清空任务「' + label + '」的日志内容吗？清空后不可恢复。')) { return; }
+    el.logClear.disabled = true;
+    api('DELETE', '/api/jobs/' + encodeURIComponent(state.logJobId) + '/log')
+      .then(function (data) {
+        toast('已清空日志（释放 ' + formatSize(data.freed || 0) + '）', 'ok');
+        return loadLog();
+      })
+      .catch(function (err) { toast(err.message, 'error'); })
+      .then(function () { el.logClear.disabled = false; });
+  }
+
+  function safeDecode(s) {
+    if (!s) { return ''; }
+    try {
+      return decodeURIComponent(s);
+    } catch (e) {
+      return '';
+    }
   }
 
   function setAutoRefresh(on) {
@@ -633,6 +711,8 @@
     setAutoRefresh(false);
   });
   el.logReload.addEventListener('click', loadLog);
+  el.logExport.addEventListener('click', exportLog);
+  el.logClear.addEventListener('click', clearLog);
   el.logLines.addEventListener('change', loadLog);
   el.logAuto.addEventListener('change', function () {
     setAutoRefresh(el.logAuto.checked);

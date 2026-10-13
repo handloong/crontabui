@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -590,6 +592,210 @@ func TestJobLogEndpoint(t *testing.T) {
 	rec = h.do(t, http.MethodGet, "/api/jobs/"+id+"/log?lines=999999", nil, cookie)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("huge lines status = %d", rec.Code)
+	}
+}
+
+func TestJobLogDownload(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+
+	rec := h.do(t, http.MethodPost, "/api/jobs", map[string]any{
+		"name": "每日备份/清理", "schedule": "* * * * *", "command": "/bin/echo", "captureLog": true,
+	}, cookie)
+	id, _ := decodeData(t, rec)["id"].(string)
+
+	// 内容刻意超过 200 行默认窗口，用来证明导出不受「显示末尾 N 行」影响
+	var sb strings.Builder
+	for i := 0; i < 500; i++ {
+		sb.WriteString("line-")
+		sb.WriteString(strconv.Itoa(i))
+		sb.WriteByte('\n')
+	}
+	full := sb.String()
+	if err := os.WriteFile(filepath.Join(h.logDir, id+".log"), []byte(full), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	// 带上 lines 参数也不该被截断
+	rec = h.do(t, http.MethodGet, "/api/jobs/"+id+"/log/download?lines=1", nil, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != full {
+		t.Errorf("导出内容被截断：得到 %d 字节，期望 %d 字节", len(got), len(full))
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	disp := rec.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(disp, "attachment;") {
+		t.Errorf("Content-Disposition = %q", disp)
+	}
+	if !strings.Contains(disp, "filename*=UTF-8''") {
+		t.Errorf("非 ASCII 文件名应走 filename*：%q", disp)
+	}
+	if strings.ContainsAny(disp, "\r\n") {
+		t.Errorf("Content-Disposition 含换行，存在头注入风险：%q", disp)
+	}
+
+	raw := rec.Header().Get("X-Log-Filename")
+	name, err := url.PathUnescape(raw)
+	if err != nil {
+		t.Fatalf("X-Log-Filename 解码失败: %v (%q)", err, raw)
+	}
+	if !strings.HasPrefix(name, "每日备份_清理-") {
+		t.Errorf("文件名 = %q，期望以「每日备份_清理-」开头（路径分隔符被替换）", name)
+	}
+	if !strings.HasSuffix(name, ".log") {
+		t.Errorf("文件名 = %q，期望 .log 结尾", name)
+	}
+}
+
+func TestJobLogDownloadMissing(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+
+	rec := h.do(t, http.MethodPost, "/api/jobs", map[string]any{
+		"name": "no-log", "schedule": "* * * * *", "command": "/bin/echo",
+	}, cookie)
+	id, _ := decodeData(t, rec)["id"].(string)
+
+	rec = h.do(t, http.MethodGet, "/api/jobs/"+id+"/log/download", nil, cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+	if msg := errorOf(t, rec); !strings.Contains(msg, "日志文件") {
+		t.Errorf("error = %q", msg)
+	}
+}
+
+func TestJobLogDownloadUnknownJob(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+	rec := h.do(t, http.MethodGet, "/api/jobs/deadbeef/log/download", nil, cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestJobLogClear(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+
+	rec := h.do(t, http.MethodPost, "/api/jobs", map[string]any{
+		"name": "clear", "schedule": "* * * * *", "command": "/bin/echo", "captureLog": true,
+	}, cookie)
+	id, _ := decodeData(t, rec)["id"].(string)
+
+	logPath := filepath.Join(h.logDir, id+".log")
+	if err := os.WriteFile(logPath, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	rec = h.do(t, http.MethodDelete, "/api/jobs/"+id+"/log", nil, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if freed, _ := decodeData(t, rec)["freed"].(float64); freed != 8 {
+		t.Errorf("freed = %v, want 8", decodeData(t, rec)["freed"])
+	}
+
+	// 关键：文件必须还在（截断语义），而不是被 unlink
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("清空后文件应仍然存在: %v", err)
+	}
+	if fi.Size() != 0 {
+		t.Errorf("清空后 size = %d, want 0", fi.Size())
+	}
+
+	// 查看接口此时应报文件为空（必须在重新写入之前断言）
+	rec = h.do(t, http.MethodGet, "/api/jobs/"+id+"/log", nil, cookie)
+	if data := decodeData(t, rec); data["content"] != "" || data["exists"] != true {
+		t.Errorf("清空后 log 接口返回 content=%v exists=%v", data["content"], data["exists"])
+	}
+
+	// 再写入应当照常追加，说明 inode 没被换掉
+	if err := os.WriteFile(logPath, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("清空后写入失败: %v", err)
+	}
+	if got, _ := os.ReadFile(logPath); string(got) != "after\n" {
+		t.Errorf("清空后内容 = %q", got)
+	}
+}
+
+func TestJobLogClearMissing(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+
+	rec := h.do(t, http.MethodPost, "/api/jobs", map[string]any{
+		"name": "no-log", "schedule": "* * * * *", "command": "/bin/echo",
+	}, cookie)
+	id, _ := decodeData(t, rec)["id"].(string)
+
+	rec = h.do(t, http.MethodDelete, "/api/jobs/"+id+"/log", nil, cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestJobLogEndpointsRequireAuth(t *testing.T) {
+	h := newHarness(t, "")
+	for _, tc := range []struct {
+		method string
+		target string
+	}{
+		{http.MethodGet, "/api/jobs/deadbeef/log/download"},
+		{http.MethodDelete, "/api/jobs/deadbeef/log"},
+	} {
+		rec := h.do(t, tc.method, tc.target, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s: status = %d, want 401", tc.method, tc.target, rec.Code)
+		}
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"每日备份", "每日备份"},
+		{"a/b\\c", "a_b_c"},
+		{"a:b*c?d", "a_b_c_d"},
+		{"quote\"here", "quote_here"},
+		{"cr\r\nlf", "crlf"},
+		{"  spaced  ", "spaced"},
+	} {
+		if got := sanitizeFileName(tc.in); got != tc.want {
+			t.Errorf("sanitizeFileName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestLogFileNameFallsBackToID(t *testing.T) {
+	// 名字只由控制字符/空白组成时会被清空，此时应退回任务 ID
+	name := logFileName(crontab.Job{ID: "a1b2c3d4", Name: "\r\n\t  "})
+	if !strings.HasPrefix(name, "a1b2c3d4-") {
+		t.Errorf("logFileName = %q，名字被清空后应退回任务 ID", name)
+	}
+	if !strings.HasSuffix(name, ".log") {
+		t.Errorf("logFileName = %q", name)
+	}
+	// 名字里的路径分隔符应被替换，而不是触发回退
+	if got := logFileName(crontab.Job{ID: "a1b2c3d4", Name: "/etc/passwd"}); !strings.HasPrefix(got, "_etc_passwd-") {
+		t.Errorf("logFileName = %q", got)
+	}
+}
+
+func TestEncodeRFC5987(t *testing.T) {
+	// 中文按 UTF-8 逐字节编码；attr-char 之外的字符必须被转义
+	got := encodeRFC5987("备份.log")
+	want := "%E5%A4%87%E4%BB%BD.log"
+	if got != want {
+		t.Errorf("encodeRFC5987 = %q, want %q", got, want)
+	}
+	for _, bad := range []string{" ", "'", "(", ")", ":", ";", "@", "*"} {
+		if enc := encodeRFC5987(bad); strings.Contains(enc, bad) {
+			t.Errorf("encodeRFC5987(%q) = %q，该字符应被转义", bad, enc)
+		}
 	}
 }
 
