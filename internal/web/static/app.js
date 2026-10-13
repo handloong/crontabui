@@ -138,23 +138,24 @@
         ? '<span class="badge badge-info">' + formatSize(job.logSize) + '</span>'
         : '<span class="badge badge-off">无日志</span>';
 
+      // data-label 供窄屏下的卡片式布局用（CSS 里通过 ::before 显示字段名）
       return '' +
         '<tr data-id="' + escapeHtml(job.id) + '">' +
-        '<td>' + status + '</td>' +
-        '<td>' +
+        '<td data-label="状态">' + status + '</td>' +
+        '<td data-label="任务">' +
         '<span class="cell-name">' + (job.name ? escapeHtml(job.name) : '<span class="muted">未命名任务</span>') + '</span>' +
         '<span class="id-tag">#' + escapeHtml(job.id) + '</span>' +
         '</td>' +
-        '<td>' +
+        '<td data-label="执行周期">' +
         '<span class="cron">' + escapeHtml(job.schedule) + '</span>' +
         '<span class="sched-desc">' + escapeHtml(job.description) + '</span>' +
         '</td>' +
-        '<td>' +
+        '<td data-label="命令">' +
         '<div class="cmd" title="' + escapeHtml(job.command) + '">' + escapeHtml(job.command) + '</div>' +
         '<div>' + capture + ' ' + logHint + '</div>' +
         warning +
         '</td>' +
-        '<td>' +
+        '<td data-label="操作">' +
         '<div class="row-actions">' +
         '<button class="btn btn-ghost btn-mini" data-act="toggle" data-id="' + escapeHtml(job.id) + '">' +
         (job.enabled ? '停用' : '启用') + '</button>' +

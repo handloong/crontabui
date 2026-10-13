@@ -71,6 +71,8 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%; /* 阻止 iOS 横屏/聚焦时擅自放大字号 */
+  -webkit-tap-highlight-color: transparent; /* 去掉移动端点击时的灰色蒙层 */
 }
 
 h1,
@@ -321,8 +323,11 @@ table.jobs th {
   white-space: nowrap;
 }
 
-table.jobs tbody tr:hover {
-  background: var(--surface-2);
+/* 只在有真实指针的设备上启用 hover —— 触屏下 hover 会"粘"在最后一次点击的行上 */
+@media (hover: hover) {
+  table.jobs tbody tr:hover {
+    background: var(--surface-2);
+  }
 }
 
 table.jobs tbody tr:last-child td {
@@ -750,6 +755,8 @@ select:focus {
   display: grid;
   place-items: center;
   min-height: 100vh;
+  /* iOS Safari 的 100vh 不含地址栏，dvh 才是真实可视高度 */
+  min-height: 100dvh;
   padding: 24px;
 }
 
@@ -820,16 +827,348 @@ select:focus {
   width: 100%;
 }
 
-@media (max-width: 640px) {
-  .cmd {
-    max-width: 190px;
+/* ==========================================================================
+   移动端适配
+   断点 780px 覆盖全部手机竖屏（iPhone 15 为 393×852 CSS px），
+   进入卡片式堆叠 + 全屏弹窗布局；380px 以下再压一档。
+   ========================================================================== */
+
+@media (max-width: 780px) {
+
+  /* ---------- 顶栏与页面骨架 ---------- */
+
+  .topbar-inner {
+    padding: 10px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    gap: 12px;
   }
 
+  /* 日志目录会挤掉版本号与按钮，小屏隐藏（日志弹窗里仍能看到） */
   .topbar-meta .meta-item {
     display: none;
   }
 
+  /* 窄屏顶栏要同时放品牌、版本号、两个按钮，收紧间距 */
+  .topbar-meta {
+    gap: 8px;
+  }
+
+  .brand {
+    gap: 8px;
+    font-size: 15px;
+  }
+
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+  }
+
+  .ver-chip {
+    padding: 2px 7px;
+    font-size: 11px;
+  }
+
   .page {
-    padding: 16px 14px 48px;
+    padding: 14px 14px calc(36px + env(safe-area-inset-bottom));
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    gap: 14px;
+  }
+
+  /* 弹窗全屏后锁住背景滚动，避免误滑动 */
+  body:has(dialog[open]) {
+    overflow: hidden;
+  }
+
+  /* ---------- 统计卡片：固定两列 ---------- */
+
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .stat {
+    padding: 11px 13px;
+  }
+
+  .stat-value {
+    font-size: 20px;
+  }
+
+  /* ---------- 面板 ---------- */
+
+  .panel-head {
+    padding: 12px 14px;
+  }
+
+  .panel-body {
+    padding: 14px;
+  }
+
+  .raw {
+    margin: 0 14px 14px;
+    padding: 10px 12px;
+    font-size: 12px;
+    max-height: 200px;
+  }
+
+  /* ---------- 触控目标：主按钮 ≥ 40px、次按钮 ≥ 36px ---------- */
+
+  .btn {
+    min-height: 40px;
+    padding: 9px 14px;
+    font-size: 14px;
+  }
+
+  .btn-mini {
+    min-height: 36px;
+    padding: 7px 11px;
+    font-size: 13px;
+  }
+
+  .icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+    font-size: 24px;
+  }
+
+  /* ---------- 表单 ---------- */
+  /* 字号必须 ≥16px，否则 iOS Safari 聚焦输入框时会自动放大整个页面 */
+
+  input[type="text"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px;
+    padding: 10px 12px;
+  }
+
+  textarea {
+    font-size: 15px;
+    min-height: 96px;
+  }
+
+  .check-row {
+    min-height: 32px;
+    margin-bottom: 12px;
+    font-size: 13.5px;
+  }
+
+  .check-row input {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* ---------- 任务表格 → 卡片式堆叠 ---------- */
+  /* 小屏放不下 5 列，改为每行一张卡片；字段名由 td 的 data-label 提供 */
+
+  table.jobs,
+  table.jobs tbody,
+  table.jobs tr,
+  table.jobs td {
+    display: block;
+    width: 100%;
+  }
+
+  table.jobs thead {
+    display: none;
+  }
+
+  table.jobs tr {
+    position: relative;
+    padding: 14px;
+    padding-right: 92px; /* 给右上角的状态徽标留位 */
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  table.jobs tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  table.jobs td {
+    padding: 0;
+    border-bottom: none;
+  }
+
+  table.jobs td + td {
+    margin-top: 12px;
+  }
+
+  /* 字段名以小字显示在内容上方 */
+  table.jobs td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 5px;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+
+  /* 状态徽标固定在卡片右上角，不单独占一行 */
+  table.jobs td[data-label="状态"] {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: auto;
+    margin-top: 0;
+  }
+
+  /* 首个内容块不需要额外上间距 */
+  table.jobs td[data-label="任务"] {
+    margin-top: 0;
+  }
+
+  /* 状态与操作两栏的文字标签没有意义，去掉 */
+  table.jobs td[data-label="状态"]::before,
+  table.jobs td[data-label="操作"]::before {
+    content: none;
+  }
+
+  /* 命令在窄屏折行显示最多 3 行，长路径不再被截成省略号 */
+  .cmd {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* 操作按钮自动铺满，5 个按钮排成 3 + 2 两行 */
+  .row-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+    gap: 8px;
+  }
+
+  .row-actions .btn {
+    width: 100%;
+  }
+
+  /* ---------- 弹窗 → 全屏 ---------- */
+
+  .dialog,
+  .dialog-wide {
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .dialog[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 任务弹窗的结构是 dialog > form > head/body/foot，form 也要参与纵向分配 */
+  .dialog[open]>form {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .dialog-head {
+    flex: 0 0 auto;
+    padding: 12px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+
+  .dialog-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    padding: 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dialog-foot {
+    flex: 0 0 auto;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+
+  .dialog-foot .btn {
+    flex: 1;
+  }
+
+  /* ---------- 日志弹窗：日志区撑满剩余高度 ---------- */
+
+  #log-dialog .dialog-body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #log-dialog .log-view {
+    flex: 1 1 auto;
+    min-height: 120px;
+    max-height: none;
+  }
+
+  .tabs .tab {
+    flex: 1;
+    min-height: 38px;
+    text-align: center;
+  }
+
+  .log-toolbar {
+    gap: 10px;
+  }
+
+  .log-toolbar-left {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+
+  /* ---------- 提示条：避开底部手势条 ---------- */
+
+  .toast {
+    bottom: calc(20px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 32px);
+  }
+
+  /* ---------- 登录页 ---------- */
+
+  .auth-body {
+    padding: 20px;
+    padding-top: max(20px, env(safe-area-inset-top));
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
+  }
+
+  .auth-card {
+    padding: 26px 20px 22px;
+    border-radius: 16px;
+  }
+}
+
+/* 超窄屏（iPhone SE / 小屏安卓 ≤ 380px）再压一档 */
+@media (max-width: 380px) {
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .page {
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
+  }
+
+  .row-actions {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 超窄屏优先保住两个操作按钮，版本号仍可在更新弹窗里看到 */
+  .ver-chip {
+    display: none;
   }
 }
