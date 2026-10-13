@@ -1,0 +1,153 @@
+name: Release
+
+# 触发方式：
+#   1) 推送 tag，例如 git tag v1.0.0 && git push origin v1.0.0
+#   2) 手动触发（Actions 页面 Run workflow），填写一个已存在的 tag
+# 流程：跑测试 → 矩阵构建各 Linux 架构二进制 → 打包 → 汇总校验和 → 发布 GitHub Release
+# 产物：仅 Linux（CGO_ENABLED=0 静态二进制，不挑发行版、不挑 glibc 版本）
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（需已存在，如 v1.0.0）'
+        required: true
+        type: string
+
+# 发布 Release 需要写权限；GITHUB_TOKEN 由 Actions 自动注入，无需手动配 secret
+permissions:
+  contents: write
+
+jobs:
+  # 第一道门：测试不过就不构建、不发布
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+  # 矩阵构建：每个架构一个 job，并行跑，互不影响
+  build:
+    name: 构建 linux/${{ matrix.goarch }}${{ matrix.suffix }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # 某个架构失败不影响其它架构继续产出
+      matrix:
+        include:
+          # amd64：x86_64 服务器，主力目标
+          - { goarch: amd64, goarm: '', suffix: '' }
+          # 386：32 位 x86，老机器 / 老镜像
+          - { goarch: '386', goarm: '', suffix: '' }
+          # arm64：ARMv8，树莓派 3/4/5、各种 ARM 云主机
+          - { goarch: arm64, goarm: '', suffix: '' }
+          # arm：ARMv7 硬浮点，树莓派 2/Zero 2 等 32 位 ARM
+          - { goarch: arm,   goarm: '7', suffix: 'v7' }
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整历史，供 git describe 兜底
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 手动触发时 tag 不在 ref 里，需要单独解析；tag 推送时直接用 ref_name
+      - name: 解析版本号
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建二进制
+        env:
+          CGO_ENABLED: '0' # 纯静态、零第三方依赖，交叉编译天然可用
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }} # 仅 arm/386 等 32 位架构有意义，其它架构会被忽略
+        run: |
+          mkdir -p dist
+          # 产物名带上 v7 后缀区分 ARMv7，避免和 arm64 混淆
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ steps.vars.outputs.version }}" \
+            -o "dist/crontabui-linux-${{ matrix.goarch }}${{ matrix.suffix }}" \
+            ./cmd/crontabui
+
+      - name: 打包
+        run: |
+          set -euo pipefail
+          VER="${{ steps.vars.outputs.version }}"
+          # 去掉 tag 前缀 v，文件名更清爽：v1.0.0 -> 1.0.0
+          NAME="crontabui_${VER#v}_linux_${{ matrix.goarch }}${{ matrix.suffix }}"
+          mkdir -p "pkg/${NAME}"
+          # 二进制 + 部署所需文件，解压即可 scp 上线
+          cp "dist/crontabui-linux-${{ matrix.goarch }}${{ matrix.suffix }}" "pkg/${NAME}/"
+          cp deploy/install-corntab.sh \
+             deploy/crontabui.service \
+             deploy/crontabui.env.example \
+             deploy/crontabui.logrotate \
+             deploy/nginx.conf.example \
+             "pkg/${NAME}/"
+          cp README.md "pkg/${NAME}/"
+          tar -czf "dist/${NAME}.tar.gz" -C pkg "${NAME}"
+
+      - name: 上传构建产物（job 间传递）
+        uses: actions/upload-artifact@v4
+        with:
+          name: crontabui-linux-${{ matrix.goarch }}${{ matrix.suffix }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # 汇总所有产物 + 生成校验和 + 发布 Release
+  release:
+    name: 发布 Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true # 把各矩阵 job 的产物合并到同一个 dist/ 目录
+
+      - name: 生成 SHA256 校验和
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 手动触发时用输入的 tag，tag 推送时用当前 ref
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true # 按 commit 自动生成更新说明
+          # 含 '-' 的 tag（如 v1.0.0-rc1）自动标记为预发布；手动触发时判断输入的那个 tag
+          prerelease: ${{ contains(github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name, '-') }}
+          files: dist/*
+          fail_on_unmatched_files: true

@@ -28,6 +28,11 @@ LOG_DIR="/var/log/crontabui"
 DATA_DIR="/var/lib/crontabui"
 SERVICE="${APP_NAME}"
 
+# 本机架构探测结果（由 detect_arch 填充）。给默认值，避免 set -u 下引用未定义变量
+HOST_GOARCH=""
+HOST_ELF_MACHINE=""
+HOST_ELF_CLASS=""
+
 # ---------------------------------------------------------------------------
 # 默认参数
 # ---------------------------------------------------------------------------
@@ -111,9 +116,29 @@ require_root() {
   [ "$(id -u)" -eq 0 ] || die "请用 root 运行：sudo $0 $*"
 }
 
+# 识别本机 CPU 架构，推导出期望的 ELF machine 码与位宽，供后面校验二进制是否匹配。
+# 覆盖 Go 交叉编译的全部 Linux 目标：amd64 / 386 / arm64 / arm(GOARM=7)
+# 结果写入三个全局变量：HOST_GOARCH、HOST_ELF_MACHINE、HOST_ELF_CLASS
+detect_arch() {
+  local m
+  m=$(uname -m)
+  case "$m" in
+    x86_64|amd64)          HOST_GOARCH="amd64"; HOST_ELF_MACHINE="3e00"; HOST_ELF_CLASS="02" ;;
+    i386|i486|i586|i686)   HOST_GOARCH="386";   HOST_ELF_MACHINE="0300"; HOST_ELF_CLASS="01" ;;
+    aarch64|arm64)         HOST_GOARCH="arm64"; HOST_ELF_MACHINE="b700"; HOST_ELF_CLASS="02" ;;
+    armv7l|armv7)          HOST_GOARCH="arm";   HOST_ELF_MACHINE="2800"; HOST_ELF_CLASS="01" ;;
+    # ARMv6（树莓派 1 / Zero）能装但跑不了硬浮点 ARMv7 二进制，提前说清楚，别让人装完才发现
+    armv6l|armv6)          HOST_GOARCH="arm";   HOST_ELF_MACHINE="2800"; HOST_ELF_CLASS="01"
+                           warn "检测到 ARMv6。Release 只提供 ARMv7(GOARM=7) 二进制，可能报 Illegal instruction；若失败请用源码自行编译（GOARM=6）。" ;;
+    *) die "不支持的架构：${m}（本脚本支持 x86_64 / i686 / aarch64 / armv7l）" ;;
+  esac
+  ok "系统架构：${m}（对应 Go 目标 linux/${HOST_GOARCH}）"
+}
+
 check_platform() {
   [ "$(uname -s)" = "Linux" ] || die "本脚本只支持 Linux（当前：$(uname -s)）"
-  [ "$(uname -m)" = "x86_64" ] || die "本脚本只支持 x86_64（当前：$(uname -m)）"
+  # 已识别过就不重复打印（do_install 在预演分支前已调用过一次）
+  [ -n "${HOST_GOARCH:-}" ] || detect_arch
   [ -d /run/systemd/system ] || die "未检测到 systemd。若是容器环境，请手动用 nohup/supervisor 运行。"
   command -v systemctl >/dev/null 2>&1 || die "找不到 systemctl。"
   if [ -r /etc/os-release ]; then
@@ -126,22 +151,25 @@ check_platform() {
   fi
 }
 
-# 校验二进制：必须是 64 位 x86-64 的 ELF
+# 校验二进制：必须是 ELF，且位宽与 machine 码都要与本机架构一致
 check_binary_file() {
   local f="$1" magic class machine
   [ -f "$f" ] || die "找不到二进制文件：$f"
   [ -s "$f" ] || die "二进制文件为空：$f"
   magic=$(od -An -N4 -tx1 "$f" | tr -d ' \n')
   [ "$magic" = "7f454c46" ] || die "$f 不是 ELF 可执行文件（magic=$magic）。
-请使用 build.sh / build.ps1 产出的 linux-amd64 二进制。"
+请使用 Release 页面或 build.sh 产出的 linux-${HOST_GOARCH} 二进制。"
   class=$(od -An -j4 -N1 -tx1 "$f" | tr -d ' \n')
-  [ "$class" = "02" ] || die "$f 不是 64 位可执行文件（class=$class）。"
+  [ "$class" = "$HOST_ELF_CLASS" ] || die "$f 位宽与本机不符（class=$class，本机应为 $HOST_ELF_CLASS；64 位=02，32 位=01）。
+本机是 linux/${HOST_GOARCH}，请下载对应架构的包。"
   machine=$(od -An -j18 -N2 -tx1 "$f" | tr -d ' \n')
-  [ "$machine" = "3e00" ] || die "$f 不是 x86-64 架构（machine=$machine）。"
+  [ "$machine" = "$HOST_ELF_MACHINE" ] || die "$f 架构与本机不符（machine=$machine，本机应为 $HOST_ELF_MACHINE）。
+本机是 linux/${HOST_GOARCH}，请下载对应架构的包。"
 }
 
 # 定位要安装的二进制
 locate_binary() {
+  [ -n "$HOST_GOARCH" ] || detect_arch
   if [ -n "$BINARY" ]; then
     check_binary_file "$BINARY"
     printf '%s\n' "$BINARY"
@@ -149,14 +177,20 @@ locate_binary() {
   fi
   local here c
   here=$(cd "$(dirname "$0")" && pwd)
-  for c in "${here}/${APP_NAME}-linux-amd64" "${here}/${APP_NAME}" "${here}/${APP_NAME}-linux-x86_64"; do
+  # 按本机架构依次尝试常见命名（ARMv7 产物带 v7 后缀，与 arm64 区分）
+  for c in \
+    "${here}/${APP_NAME}-linux-${HOST_GOARCH}" \
+    "${here}/${APP_NAME}-linux-${HOST_GOARCH}v7" \
+    "${here}/${APP_NAME}-linux-${HOST_GOARCH}-v7" \
+    "${here}/${APP_NAME}" \
+    "${here}/${APP_NAME}-linux-x86_64"; do
     if [ -f "$c" ]; then
       check_binary_file "$c"
       printf '%s\n' "$c"
       return
     fi
   done
-  die "在 ${here} 里找不到 ${APP_NAME}-linux-amd64，请用 --binary <路径> 指定。"
+  die "在 ${here} 里找不到适配本机（linux/${HOST_GOARCH}）的 ${APP_NAME} 二进制，请用 --binary <路径> 指定。"
 }
 
 # 检查/安装 cron（crontab 命令来自 Debian 的 cron 包）
@@ -304,6 +338,8 @@ UNIT_EOF
 # 安装
 # ---------------------------------------------------------------------------
 do_install() {
+  # 架构识别在预演模式下也要执行：locate_binary 依赖它判断二进制是否匹配本机
+  detect_arch
   if [ "$DRY_RUN" -eq 1 ]; then
     info "预演模式：只打印将要执行的操作，不会改动系统"
   else

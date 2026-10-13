@@ -1,0 +1,49 @@
+name: CI
+
+# 每次推送到 main 或向 main 提 PR 时运行：静态检查 + 单元测试 + 构建校验。
+# 不产出 Release，只做质量门禁。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 只读权限即可（不写 Release、不推镜像）
+permissions:
+  contents: read
+
+# 同一分支/PR 的多次推送只保留最新一次，旧的自动取消，省额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 测试与构建校验
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          # 版本直接读 go.mod 里的 go 指令，避免两处写法不一致
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet（静态检查）
+        run: go vet ./...
+
+      - name: go test（单元测试）
+        run: go test -count=1 ./...
+
+      - name: 构建校验（linux/amd64）
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -trimpath -ldflags "-s -w -X main.version=ci" -o /tmp/crontabui ./cmd/crontabui
+          /tmp/crontabui --version

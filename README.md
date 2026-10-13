@@ -30,7 +30,29 @@
 
 ## 快速开始
 
-### 1. 构建 Linux 可执行文件
+### 0. 直接下载预编译包（推荐）
+
+不想自己编译的话，从 [Releases](https://github.com/handloong/crontabui/releases/latest) 下载对应架构的包
+（`checksums.txt` 可用于校验下载完整性）：
+
+| 包名 | 适用机器 |
+|---|---|
+| `crontabui_<版本>_linux_amd64.tar.gz` | x86_64（绝大多数 VPS / 云服务器） |
+| `crontabui_<版本>_linux_386.tar.gz` | 32 位 x86 老机器 |
+| `crontabui_<版本>_linux_arm64.tar.gz` | ARMv8：树莓派 3/4/5、ARM 云主机、路由器 |
+| `crontabui_<版本>_linux_armv7.tar.gz` | ARMv7 硬浮点：树莓派 2 / Zero 2（32 位系统） |
+
+```bash
+tar -xzf crontabui_v1.0.0_linux_amd64.tar.gz
+cd crontabui_v1.0.0_linux_amd64
+sudo ./install-corntab.sh --dry-run    # 预演，不改动系统
+sudo ./install-corntab.sh              # 正式安装
+```
+
+安装脚本会**自动识别本机架构**，并校验包内二进制的 ELF 位宽与机器码是否匹配；不匹配直接拒绝并提示该下哪个包。
+ARMv6 设备（树莓派 1 / Zero 初代）没有预编译包，需自行用源码编译 `GOARM=6`。
+
+### 1. 从源码构建
 
 ```bash
 # Linux / macOS / WSL
@@ -42,10 +64,14 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 产物为 `dist/crontabui-linux-amd64`（静态链接，无 CGO，不挑发行版）。
 
-也可以直接用 make：
+也可以直接用 make（覆盖全部 4 个 Linux 架构）：
 
 ```bash
-make linux-amd64     # 或 make linux-arm64 / make windows / make test
+make linux-amd64     # x86_64
+make linux-386       # 32 位 x86
+make linux-arm64     # ARMv8
+make linux-arm       # ARMv7（产物名 dist/crontabui-linux-armv7）
+make test            # 跑测试
 ```
 
 ### 2. 部署并运行
@@ -117,7 +143,7 @@ sudo ./install-corntab.sh --uninstall             # 卸载（保留日志与备�
 sudo ./install-corntab.sh --uninstall --purge     # 卸载并删除日志与备份
 ```
 
-脚本做过的安全检查：必须是 root、必须是 Linux x86_64、必须有 systemd、校验被安装文件确实是 **64 位 x86-64 ELF**、端口与内存上限范围校验、令牌长度校验、`--bind 0.0.0.0` 时打印暴露警告、生成的单元文件不允许残留任何未替换占位符。
+脚本做过的安全检查：必须是 root、必须是 Linux、必须支持 4 种架构之一（`x86_64` / `i686` / `aarch64` / `armv7l`）、必须有 systemd、校验被安装文件确实是 **ELF 且位宽与机器码都与本机架构一致**（amd64=`3e00`、386=`0300`、arm64=`b700`、arm=`2800`）、端口与内存上限范围校验、令牌长度校验、`--bind 0.0.0.0` 时打印暴露警告、生成的单元文件不允许残留任何未替换占位符。
 
 > 安装脚本的**源文件**在 `deploy/install-corntab.sh`（受版本管理），构建时自动复制一份到 `dist/`。
 
@@ -263,6 +289,26 @@ powershell -File .\build.ps1          # Windows 构建
 ```
 
 测试覆盖：表达式校验与描述、crontab 解析/渲染往返一致性、存储读写与并发、注入防护、令牌与会话、登录限流、日志尾读边界、跨站请求拒绝、请求体上限等，共 **99 个用例**（含子测试），全部不依赖真实 `crontab`（通过接口注入假实现）。
+
+## 持续集成与发布
+
+仓库内置两个 GitHub Actions 工作流（`.github/workflows/`）：
+
+| 工作流 | 触发条件 | 做什么 |
+|---|---|---|
+| `ci.yml` | 推送 / PR 到 `main` | `go vet`、`go test`、构建校验 |
+| `release.yml` | 推送 `v*` tag（或手动触发） | 跑测试 → 矩阵构建 4 个 Linux 架构 → 打包 → 生成 `checksums.txt` → 发布 Release |
+
+发版只需打一个 tag：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+CI 会自动跑测试、构建 `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm`（ARMv7）四个包并附到 Release 上。
+含 `-` 的 tag（如 `v1.0.0-rc1`）会被标记为预发布。也可以到 Actions 页面手动触发 `Release` 并填写一个已存在的 tag。
+版本号通过 `-ldflags "-X main.version=<tag>"` 注入，可用 `crontabui --version` 核对。
 
 ## 非目标
 
