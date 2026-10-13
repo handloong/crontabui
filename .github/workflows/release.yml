@@ -5,6 +5,11 @@ name: Release
 #   2) 手动触发（Actions 页面 Run workflow），填写一个已存在的 tag
 # 流程：跑测试 → 矩阵构建各 Linux 架构二进制 → 打包 → 汇总校验和 → 发布 GitHub Release
 # 产物：仅 Linux（CGO_ENABLED=0 静态二进制，不挑发行版、不挑 glibc 版本）
+#
+# 注：所有 action 均使用 Node 24 运行时的主版本
+# （checkout@v7 / setup-go@v7 / upload-artifact@v7 / download-artifact@v8 / action-gh-release@v3）。
+# 旧版跑在 Node 20 上，GitHub 已弃用，会被强制升到 Node 24 并在日志里打警告。
+# 这几版要求 Actions Runner ≥ 2.327.1；GitHub 托管的 ubuntu-latest 满足，自建 runner 需先升级。
 
 on:
   push:
@@ -28,10 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -62,12 +67,12 @@ jobs:
 
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # 需要完整历史，供 git describe 兜底
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -115,7 +120,7 @@ jobs:
           tar -czf "dist/${NAME}.tar.gz" -C pkg "${NAME}"
 
       - name: 上传构建产物（job 间传递）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crontabui-linux-${{ matrix.goarch }}${{ matrix.suffix }}
           path: dist/*
@@ -129,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 下载全部构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true # 把各矩阵 job 的产物合并到同一个 dist/ 目录
@@ -141,7 +146,7 @@ jobs:
           cat checksums.txt
 
       - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # 手动触发时用输入的 tag，tag 推送时用当前 ref
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
