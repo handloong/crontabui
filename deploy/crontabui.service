@@ -1,0 +1,57 @@
+[Unit]
+Description=CrontabUI - Linux crontab 可视化管理器
+Documentation=https://github.com/your-org/crontabui
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 运行身份：默认 root 以便读取 /var/log/cron 与日志目录；
+# 若只管当前用户的 crontab，改成对应用户更安全（User=alice）。
+User=root
+Group=root
+
+# 令牌放在受保护的环境文件里，避免出现在 ps 输出与 shell 历史中：
+#   install -d -m 700 /etc/crontabui
+#   printf 'CRONTABUI_TOKEN=%s\n' "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" \
+#     > /etc/crontabui/crontabui.env
+#   chmod 600 /etc/crontabui/crontabui.env
+EnvironmentFile=-/etc/crontabui/crontabui.env
+
+ExecStart=/usr/local/bin/crontabui \
+    --token ${CRONTABUI_TOKEN} \
+    --bind 127.0.0.1 \
+    --port 8080 \
+    --log-dir /var/log/crontabui \
+    --data-dir /var/lib/crontabui \
+    --mem-limit 40
+
+# 进程被 OOM 或崩溃后自动拉起
+Restart=always
+RestartSec=3
+
+# 内存双保险：程序内用 debug.SetMemoryLimit 兜底，systemd 侧再压一层硬上限
+MemoryHigh=48M
+MemoryMax=64M
+
+# 加固：程序只需读 crontab、读写日志目录，其余一概最小化权限。
+# 刻意不使用 PrivateTmp= / PrivateDevices= / ProtectSystem=，因为「立即执行」
+# 会拉起用户自己的命令，沙箱会改变其行为（例如写 /tmp、写 /etc）。
+# 若不需要「立即执行」，可自行启用这三项获得更强隔离。
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · CrontabUI</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+
+<body class="auth-body">
+  <main class="auth-card">
+    <div class="auth-head">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"></circle>
+          <path d="M12 7v5l3.5 2"></path>
+        </svg>
+      </span>
+      <h1>登录 CrontabUI</h1>
+      <p>请输入启动服务时通过 <code>--token</code> 指定的访问令牌</p>
+    </div>
+
+    <div class="auth-error" id="error-box" hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </svg>
+      <span id="error-text"></span>
+    </div>
+
+    <form id="login-form" autocomplete="on" novalidate>
+      <div class="field-row">
+        <label class="field-label" for="token">访问令牌</label>
+        <div class="field-inline">
+          <input id="token" name="token" type="password" autocomplete="current-password" placeholder="粘贴访问令牌"
+            spellcheck="false" required autofocus>
+          <button class="btn btn-ghost" type="button" id="btn-toggle">显示</button>
+        </div>
+      </div>
+      <button class="btn btn-primary w-full" type="submit" id="btn-submit">登录</button>
+    </form>
+
+    <p class="auth-foot">
+      令牌仅用于本地校验，不会写入磁盘。<br>
+      忘记令牌？重启服务时重新指定 <code>--token</code> 即可。
+    </p>
+  </main>
+
+  <script src="/static/login.js"></script>
+</body>
+
+</html>

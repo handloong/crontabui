@@ -1,0 +1,16 @@
+# 任务日志轮转。安装到 /etc/logrotate.d/crontabui
+#
+# 注意：程序是按「文件末尾若干行」读取日志的，轮转后请保留最近一份历史文件
+# （copytruncate 或 rotate 1 都可以），其余历史文件界面不展示，但可直接用
+# less / grep 查看。
+/var/log/crontabui/*.log {
+    daily
+    rotate 7
+    size 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}
