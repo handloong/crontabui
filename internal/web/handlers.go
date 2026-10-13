@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,11 @@ func (s *Server) linesParam(r *http.Request) int {
 
 // ---------- 页面 ----------
 
+// versionPlaceholder 是内嵌 HTML 里的版本占位符。
+// 页面响应头带了 CSP（script-src 'self'），内联 <script> 会被浏览器拒绝，
+// 因此版本号只能在服务端渲染时替换，不能靠前端脚本注入。
+const versionPlaceholder = "{{VERSION}}"
+
 func (s *Server) serveStaticPage(w http.ResponseWriter, name string) {
 	raw, err := readStatic(name)
 	if err != nil {
@@ -96,9 +102,10 @@ func (s *Server) serveStaticPage(w http.ResponseWriter, name string) {
 		http.Error(w, "页面资源缺失", http.StatusInternalServerError)
 		return
 	}
+	body := bytes.ReplaceAll(raw, []byte(versionPlaceholder), []byte(s.opts.Version))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Write(raw)
+	w.Write(body)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

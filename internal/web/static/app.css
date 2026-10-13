@@ -786,6 +786,18 @@ select:focus {
   font-size: 13px;
 }
 
+/* 登录页版本号：小号、弱化，数字用等宽便于对齐 */
+.auth-head p.auth-version {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.auth-version .ver-num {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
 .auth-error {
   display: flex;
   align-items: center;
@@ -798,14 +810,15 @@ select:focus {
   margin-bottom: 14px;
 }
 
-.auth-foot {
+/* 登录页底部的功能简介 */
+.auth-desc {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--border-soft);
   color: var(--text-faint);
   font-size: 12px;
   text-align: center;
-  line-height: 1.7;
+  line-height: 1.8;
 }
 
 .center {

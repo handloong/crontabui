@@ -23,6 +23,8 @@ const (
 	defaultMaxLogLines = 2000
 	// defaultLogLines 是日志接口的默认行数。
 	defaultLogLines = 200
+	// defaultVersion 是未注入版本号时展示的兜底值。
+	defaultVersion = "dev"
 )
 
 // ExecFunc 立即执行一个任务。由调用方决定输出如何重定向。
@@ -38,6 +40,9 @@ type Options struct {
 	Exec        ExecFunc
 	Logger      *slog.Logger
 	MaxLogLines int
+	// Version 是构建时通过 -ldflags 注入的版本号，展示在页面上。
+	// 留空时回退为 "dev"。
+	Version string
 }
 
 // Server 是 HTTP 服务。
@@ -63,6 +68,9 @@ func New(opts Options) (*Server, error) {
 	}
 	if opts.MaxLogLines <= 0 {
 		opts.MaxLogLines = defaultMaxLogLines
+	}
+	if strings.TrimSpace(opts.Version) == "" {
+		opts.Version = defaultVersion
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -102,6 +110,9 @@ func (s *Server) Handler() http.Handler { return s.handler }
 
 // LogDir 返回任务日志目录。
 func (s *Server) LogDir() string { return s.opts.LogDir }
+
+// Version 返回用于页面展示的版本号。
+func (s *Server) Version() string { return s.opts.Version }
 
 func (s *Server) authGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

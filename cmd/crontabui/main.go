@@ -68,6 +68,7 @@ func run() error {
 
 	server, err := web.New(web.Options{
 		Token:   cfg.Token,
+		Version: version,
 		Auth:    authManager,
 		Store:   store,
 		LogDir:  logDir,

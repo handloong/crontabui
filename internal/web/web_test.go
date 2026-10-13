@@ -20,6 +20,9 @@ import (
 
 const testToken = "token-12345"
 
+// testVersion 用于验证版本号是否被注入到页面里（内容刻意与 "dev" 区分开）。
+const testVersion = "v9.9.9-test"
+
 // memRunner 是内存版 Runner，避免测试真的调用 crontab。
 type memRunner struct {
 	mu      sync.Mutex
@@ -71,6 +74,7 @@ func newHarness(t *testing.T, initial string) *harness {
 
 	srv, err := New(Options{
 		Token:   testToken,
+		Version: testVersion,
 		Auth:    auth.New(testToken, time.Hour),
 		Store:   crontab.NewStore(h.runner, h.logDir, t.TempDir()),
 		LogDir:  h.logDir,
@@ -216,6 +220,72 @@ func TestProtectedRoutesRequireSession(t *testing.T) {
 			t.Errorf("status = %d, want 401", rec.Code)
 		}
 	})
+}
+
+// TestPageVersionInjection 覆盖服务端版本号替换：登录页要显示版本号与功能简介，
+// 且不能残留未替换的占位符（CSP 禁止内联脚本，所以只能靠服务端替换）。
+func TestPageVersionInjection(t *testing.T) {
+	h := newHarness(t, "")
+	cookie := h.login(t)
+
+	t.Run("登录页包含版本号", func(t *testing.T) {
+		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
+		if !strings.Contains(body, testVersion) {
+			t.Errorf("登录页未包含版本号 %q", testVersion)
+		}
+	})
+
+	t.Run("登录页不含未替换占位符", func(t *testing.T) {
+		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
+		if strings.Contains(body, versionPlaceholder) {
+			t.Errorf("登录页残留未替换的占位符 %q", versionPlaceholder)
+		}
+	})
+
+	t.Run("管理页不含未替换占位符", func(t *testing.T) {
+		rec := h.do(t, http.MethodGet, "/", nil, cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), versionPlaceholder) {
+			t.Errorf("管理页残留未替换的占位符 %q", versionPlaceholder)
+		}
+	})
+
+	t.Run("登录页含功能简介", func(t *testing.T) {
+		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
+		if !strings.Contains(body, "可视化管理器") {
+			t.Errorf("登录页缺少功能简介")
+		}
+	})
+
+	t.Run("已移除的令牌提示语不再出现", func(t *testing.T) {
+		body := h.do(t, http.MethodGet, "/login", nil).Body.String()
+		for _, gone := range []string{"请输入启动服务时", "令牌仅用于本地校验", "忘记令牌", "不会写入磁盘"} {
+			if strings.Contains(body, gone) {
+				t.Errorf("登录页仍包含应移除的提示语：%q", gone)
+			}
+		}
+	})
+}
+
+// TestVersionDefaultsToDev 未注入版本号时（本地 go run / go build 不带 ldflags）必须回退为 dev。
+func TestVersionDefaultsToDev(t *testing.T) {
+	for _, given := range []string{"", "   "} {
+		srv, err := New(Options{
+			Token:   testToken,
+			Version: given,
+			Auth:    auth.New(testToken, time.Hour),
+			Store:   crontab.NewStore(&memRunner{}, t.TempDir(), t.TempDir()),
+			LogDir:  t.TempDir(),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if got := srv.Version(); got != "dev" {
+			t.Errorf("Version() = %q, want dev（Options.Version 传 %q）", got, given)
+		}
+	}
 }
 
 func TestLoginFlow(t *testing.T) {

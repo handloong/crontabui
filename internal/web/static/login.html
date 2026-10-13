@@ -20,7 +20,7 @@
         </svg>
       </span>
       <h1>登录 CrontabUI</h1>
-      <p>请输入启动服务时通过 <code>--token</code> 指定的访问令牌</p>
+      <p class="auth-version">版本 <span class="ver-num">{{VERSION}}</span></p>
     </div>
 
     <div class="auth-error" id="error-box" hidden>
@@ -44,9 +44,9 @@
       <button class="btn btn-primary w-full" type="submit" id="btn-submit">登录</button>
     </form>
 
-    <p class="auth-foot">
-      令牌仅用于本地校验，不会写入磁盘。<br>
-      忘记令牌？重启服务时重新指定 <code>--token</code> 即可。
+    <p class="auth-desc">
+      Linux crontab 可视化管理器 —— 查看 / 新增 / 编辑 / 删除定时任务，<br>
+      一键启用停用、立即执行，并在线查看任务输出与系统 cron 日志。
     </p>
   </main>
 
