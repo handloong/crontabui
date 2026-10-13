@@ -12,6 +12,7 @@ import (
 	"crontabui/internal/auth"
 	"crontabui/internal/crontab"
 	"crontabui/internal/logview"
+	"crontabui/internal/update"
 )
 
 const (
@@ -43,6 +44,8 @@ type Options struct {
 	// Version 是构建时通过 -ldflags 注入的版本号，展示在页面上。
 	// 留空时回退为 "dev"。
 	Version string
+	// Updater 提供 Web 界面内的自助更新能力；为 nil 表示该功能未启用。
+	Updater update.Updater
 }
 
 // Server 是 HTTP 服务。
@@ -99,6 +102,9 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("GET /api/logs/system", s.handleSystemLog)
 	mux.HandleFunc("GET /api/logs/files", s.handleLogFiles)
 	mux.HandleFunc("GET /api/validate", s.handleValidate)
+	mux.HandleFunc("GET /api/update", s.handleUpdateState)
+	mux.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/", s.handleAPINotFound)
 
 	s.handler = s.recoverPanic(securityHeaders(s.authGate(mux)))

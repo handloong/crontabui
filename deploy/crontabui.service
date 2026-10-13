@@ -27,7 +27,9 @@ ExecStart=/usr/local/bin/crontabui \
     --data-dir /var/lib/crontabui \
     --mem-limit 40
 
-# 进程被 OOM 或崩溃后自动拉起
+# 进程被 OOM 或崩溃后自动拉起。
+# 注意：界面里的「自助更新」也依赖这一项——替换二进制后程序给自己发 SIGTERM 退出，
+# 由 systemd 重新拉起并加载新版本。请勿删掉 Restart=always，否则更新后服务不会自动回来。
 Restart=always
 RestartSec=3
 

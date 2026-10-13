@@ -2,7 +2,7 @@
 
 极简的 **Linux crontab 可视化管理器**。单个静态二进制、**零第三方依赖**、常驻内存 **约 15MB**。
 
-浏览器里就能查看 / 新增 / 编辑 / 删除 cron 定时任务，启用停用、立即执行、在线查看任务日志与系统 cron 日志。
+浏览器里就能查看 / 新增 / 编辑 / 删除 cron 定时任务，启用停用、立即执行、在线查看任务日志与系统 cron 日志，还能**在界面里一键自助更新**到最新版本。
 
 ```
   CrontabUI v1.0.0  ·  Linux crontab 管理器
@@ -12,6 +12,7 @@
   备份目录   /var/lib/crontabui/backups
   crontab    crontab
   内存上限   40 MiB
+  自助更新   已启用（handloong/crontabui / linux/amd64）
 ```
 
 ## 特性
@@ -24,6 +25,7 @@
 | 零侵入 | 未托管内容**逐字节原样保留**，绝不覆盖你手写的 crontab |
 | 自动备份 | 每次写入前把旧 crontab 备份到 `<data-dir>/backups/`，保留最近 10 份 |
 | 登录鉴权 | CLI `--token` 指定令牌，登录页只需填一个 Token；会话存内存、不落盘 |
+| 自助更新 | 界面内检查 GitHub Release，按本机架构下载产物 → 强制 SHA256 校验 → 原子替换二进制 → 自动重启；旧版本自动备份可回滚 |
 | 安全加固 | 常量时间令牌比较、登录失败限流、跨站请求拒绝、CSP、`HttpOnly` + `SameSite=Strict` |
 | 极致轻量 | 二进制约 **6.9MB**，RSS 约 **15MB**，`debug.SetMemoryLimit` 硬上限兜底 |
 | 界面美观 | 原生 HTML/CSS/JS，无 CDN、可完全离线，深/浅色随系统自动切换 |
@@ -109,6 +111,8 @@ curl -s http://127.0.0.1:8080/healthz
 | `--crontab-bin` | `crontab` | crontab 可执行文件路径 |
 | `--mem-limit` | `40` | 内存上限（MiB），`0` 表示不限制 |
 | `--session-ttl` | `12h` | 会话滑动有效期 |
+| `--self-update` | `true` | 是否启用界面内的自助更新，`--self-update=false` 关闭 |
+| `--update-repo` | `handloong/crontabui` | 自助更新使用的 GitHub 仓库（`owner/name`） |
 | `--version` | - | 打印版本后退出 |
 
 其他：`-h` 查看帮助。
@@ -179,6 +183,42 @@ sudo cp deploy/crontabui.logrotate /etc/logrotate.d/crontabui
 sudo logrotate -d /etc/logrotate.d/crontabui   # 演习，不实际执行
 ```
 
+## 自助更新
+
+登录后顶栏会显示当前版本，旁边的「检查更新」按钮会去查 GitHub 上的最新 Release。
+有新版本时，点「立即更新」就能在浏览器里走完**下载 → 校验 → 替换 → 重启**，不用登服务器。
+
+**只跟你确认过的那个仓库打交道**：默认 `handloong/crontabui`，用 `--update-repo owner/name` 可以换成自己的 fork。
+产物按本机架构自动挑选（`amd64` / `386` / `arm64` / `armv7`），与发布工作流的命名严格对应。
+
+安全设计：
+
+- **必须登录**：更新接口一律在会话鉴权之后，写入类请求还要求同源。
+- **手动触发**：不轮询、不后台自动升级，只有点了「立即更新」才会动文件。
+- **SHA256 强制校验**：下载后拿 Release 里的 `checksums.txt` 逐字节核对，**校验文件缺失或不匹配一律中止**。
+- **ELF 头校验**：确认拿到的是本机架构的可执行文件，挡住「下错架构」和「下载到的是错误页」。
+- **来源白名单**：只允许从 `github.com` 及其官方 CDN 下载，重定向的每一跳都要过白名单。
+- **原子替换 + 自动备份**：新二进制先落在目标目录再 `rename` 覆盖（同文件系统内的原子操作），
+  旧版本留在 `<二进制路径>.bak`，随时可手工回滚。
+- **重启方式**：systemd 环境下给自己发 `SIGTERM` 走既有的优雅关闭流程，靠单元的 `Restart=always` 拉起新进程——
+  既不需要 `systemctl` 权限，也不依赖后台子进程存活（systemd 重启时会清掉整个 cgroup）。
+  非 systemd 运行时会派发一个后台进程重新拉起自身。
+
+要求二进制所在目录对服务账号可写（仓库自带的安装脚本把程序装在 `/usr/local/bin/crontabui`，服务以 root 运行，满足）；
+systemd 单元需要保留 `Restart=always`，`deploy/crontabui.service` 已配置。
+
+> 自助更新本质上等于「以服务身份执行一个下载来的二进制」。在这套工具里它不会带来额外提权
+> ——能编辑 crontab 的用户本来就能以同样身份执行任意命令——但如果服务跑在权限较大的账号下，
+> 请确保只有可信的人拿得到登录令牌。不需要这个能力就用 `--self-update=false` 关掉。
+
+**回滚**：更新后发现问题时，把备份换回去再重启即可：
+
+```bash
+sudo systemctl stop crontabui
+sudo mv /usr/local/bin/crontabui.bak /usr/local/bin/crontabui
+sudo systemctl start crontabui
+```
+
 ## 工作原理
 
 ### 任务如何写入 crontab
@@ -227,6 +267,7 @@ MAILTO=root
 - **输入校验**：拒绝名称/周期/命令中的换行与控制字符——crontab 以行为单位，不校验就等于允许通过接口注入任意定时任务。
 - **请求体上限** 64KB、请求头上限 16KB，防止单请求撑爆内存。
 - **进程权限**：程序以自身身份调用 `crontab`，不解析 shell 命令；「立即执行」通过 `/bin/sh -c` 拉起，与 cron 行为一致，请仅对可信用户开放。
+- **自助更新**：仅在登录后手动触发，下载内容强制比对 Release 的 `checksums.txt`，来源限制在 GitHub 官方域名内，替换前先做 ELF 架构校验。详见 [自助更新](#自助更新)。
 
 ### 反向代理后的来源 IP
 
@@ -288,7 +329,14 @@ make fmt      # gofmt -s -w .
 powershell -File .\build.ps1          # Windows 构建
 ```
 
-测试覆盖：表达式校验与描述、crontab 解析/渲染往返一致性、存储读写与并发、注入防护、令牌与会话、登录限流、日志尾读边界、跨站请求拒绝、请求体上限等，共 **99 个用例**（含子测试），全部不依赖真实 `crontab`（通过接口注入假实现）。
+测试覆盖：表达式校验与描述、crontab 解析/渲染往返一致性、存储读写与并发、注入防护、令牌与会话、登录限流、日志尾读边界、跨站请求拒绝、请求体上限、版本比较与产物选择、更新流程（校验失败/缺校验文件/架构不符都要中止）等，共 **125 个用例**（含子测试）。
+全部不依赖真实 `crontab`（通过接口注入假实现），也不访问外网（更新相关测试用本地假 GitHub 服务）。
+
+想验证真实的更新链路（查最新版 → 选产物 → 取校验和 → 真实下载 → SHA256 比对）可以跑这个默认跳过的用例：
+
+```bash
+CRONTABUI_LIVE_UPDATE_TEST=1 go test -run TestLiveGitHubProbe -v ./internal/update/
+```
 
 ## 持续集成与发布
 

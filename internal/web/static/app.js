@@ -7,7 +7,10 @@
     logJobId: null,
     logTab: 'job',
     timer: null,
-    toastTimer: null
+    toastTimer: null,
+    updateEnabled: false,
+    updateRunning: false,
+    updatePolling: null
   };
 
   var el = {
@@ -47,6 +50,22 @@
     logAuto: document.getElementById('log-auto'),
     logMeta: document.getElementById('log-meta'),
     logView: document.getElementById('log-view'),
+
+    version: document.getElementById('meta-version'),
+    updateBtn: document.getElementById('btn-update'),
+    updateDialog: document.getElementById('update-dialog'),
+    updateClose: document.getElementById('btn-update-close'),
+    updateCancel: document.getElementById('btn-update-cancel'),
+    updateApply: document.getElementById('btn-update-apply'),
+    updateSpinner: document.getElementById('update-spinner'),
+    updateMessage: document.getElementById('update-message'),
+    updateVers: document.getElementById('update-vers'),
+    updateCurrent: document.getElementById('update-current'),
+    updateLatest: document.getElementById('update-latest'),
+    updateBarTrack: document.getElementById('update-bar-track'),
+    updateBar: document.getElementById('update-bar'),
+    updateInfo: document.getElementById('update-info'),
+    updateNotes: document.getElementById('update-notes'),
 
     toast: document.getElementById('toast')
   };
@@ -344,7 +363,190 @@
     }
   }
 
+  /* ---------- 自助更新 ---------- */
+
+  function setUpdateMessage(text, kind) {
+    el.updateMessage.textContent = text;
+    el.updateMessage.className = 'update-msg' + (kind ? ' is-' + kind : '');
+    el.updateSpinner.hidden = kind !== 'busy';
+  }
+
+  // progress < 0 表示进度未知，渲染成滑动的不确定进度条
+  function setUpdateBar(progress) {
+    el.updateBarTrack.hidden = false;
+    if (typeof progress === 'number' && progress >= 0) {
+      el.updateBar.classList.remove('is-indeterminate');
+      el.updateBar.style.width = Math.round(progress * 100) + '%';
+      return;
+    }
+    el.updateBar.style.width = '';
+    el.updateBar.classList.add('is-indeterminate');
+  }
+
+  function resetUpdateDialog() {
+    el.updateVers.hidden = true;
+    el.updateInfo.hidden = true;
+    el.updateNotes.hidden = true;
+    el.updateBarTrack.hidden = true;
+    el.updateBar.style.width = '0%';
+    el.updateBar.classList.remove('is-indeterminate');
+    el.updateMessage.className = 'update-msg';
+    el.updateApply.disabled = true;
+    el.updateApply.textContent = '立即更新';
+    el.updateCancel.disabled = false;
+    el.updateCurrent.textContent = '—';
+    el.updateLatest.textContent = '—';
+  }
+
+  function stopUpdatePolling() {
+    if (state.updatePolling) {
+      clearTimeout(state.updatePolling);
+      state.updatePolling = null;
+    }
+  }
+
+  // 启动时问一次接口，决定顶栏要不要显示更新入口，
+  // 顺便用服务端返回的版本号覆盖 {{VERSION}} 的静态值。
+  function initUpdate() {
+    api('GET', '/api/update').then(function (data) {
+      state.updateEnabled = !!data.enabled;
+      el.updateBtn.hidden = !state.updateEnabled;
+      if (data.current) { el.version.textContent = data.current; }
+    }).catch(function () {
+      // 更新接口不可用不应影响主流程，静默跳过
+    });
+  }
+
+  function openUpdateDialog() {
+    resetUpdateDialog();
+    state.updateRunning = false;
+    el.updateDialog.showModal();
+    setUpdateMessage('正在检查最新版本…', 'busy');
+    api('POST', '/api/update/check').then(renderChecked).catch(function (err) {
+      setUpdateMessage(err.message, 'error');
+    });
+  }
+
+  function renderChecked(data) {
+    if (data.current) { el.version.textContent = data.current; }
+    el.updateCurrent.textContent = data.current || 'dev';
+    el.updateLatest.textContent = data.latest || '—';
+    el.updateVers.hidden = false;
+
+    var info = [];
+    if (data.platform) { info.push('平台 ' + data.platform); }
+    if (data.asset) {
+      info.push('产物 ' + data.asset + (data.assetSize ? '（' + formatSize(data.assetSize) + '）' : ''));
+    }
+    if (data.target) { info.push('安装位置 ' + data.target); }
+    el.updateInfo.textContent = info.join('　|　');
+    el.updateInfo.hidden = info.length === 0;
+
+    if (data.hasUpdate) {
+      el.updateNotes.hidden = !data.notes;
+      el.updateNotes.textContent = data.notes || '';
+      setUpdateMessage('发现新版本 ' + data.latest + '，可以立即更新。', 'ok');
+      el.updateApply.disabled = false;
+      return;
+    }
+    if (data.latest && data.asset) {
+      setUpdateMessage('已是最新版本。', 'ok');
+      return;
+    }
+    setUpdateMessage(data.message || '没有可用的更新。', 'warn');
+  }
+
+  function applyUpdate() {
+    if (!window.confirm('将下载新版本并替换当前程序，随后服务会自动重启。\n重启期间页面会短暂断开，确定继续吗？')) {
+      return;
+    }
+    state.updateRunning = true;
+    el.updateApply.disabled = true;
+    el.updateApply.textContent = '更新中…';
+    el.updateCancel.disabled = true;
+    setUpdateBar(-1);
+    setUpdateMessage('正在开始更新…', 'busy');
+
+    api('POST', '/api/update/apply').then(function () {
+      stopUpdatePolling();
+      state.updatePolling = setTimeout(pollUpdate, 600);
+    }).catch(function (err) {
+      failUpdate(err.message);
+    });
+  }
+
+  function failUpdate(message) {
+    state.updateRunning = false;
+    el.updateBarTrack.hidden = true;
+    el.updateApply.disabled = false;
+    el.updateApply.textContent = '重试更新';
+    el.updateCancel.disabled = false;
+    setUpdateMessage(message, 'error');
+  }
+
+  function pollUpdate() {
+    state.updatePolling = null;
+    api('GET', '/api/update').then(function (data) {
+      renderProgress(data);
+      if (data.phase === 'restarting' || data.phase === 'failed') { return; }
+      state.updatePolling = setTimeout(pollUpdate, 800);
+    }).catch(function () {
+      // 服务已开始重启，请求会失败，转入健康检查等待
+      waitForRestart();
+    });
+  }
+
+  function renderProgress(data) {
+    if (data.phase === 'failed') {
+      failUpdate(data.error || '更新失败。');
+      return;
+    }
+    if (data.phase === 'restarting') {
+      waitForRestart();
+      return;
+    }
+    if (data.phase === 'idle' || data.phase === 'checking') {
+      return;
+    }
+    setUpdateBar(data.phase === 'downloading' ? data.progress : -1);
+    setUpdateMessage(data.message || '正在处理…', 'busy');
+  }
+
+  // 重启期间 HTTP 会中断，改为探测健康检查接口，服务回来后再刷新页面。
+  function waitForRestart() {
+    stopUpdatePolling();
+    setUpdateBar(-1);
+    setUpdateMessage('更新完成，服务正在重启…', 'busy');
+
+    var tries = 0;
+    var probe = function () {
+      tries += 1;
+      fetch('/healthz', { cache: 'no-store' }).then(function (res) {
+        if (!res.ok) { throw new Error('尚未就绪'); }
+        window.location.reload();
+      }).catch(function () {
+        if (tries >= 90) {
+          setUpdateMessage('服务重启超时，请手动刷新页面确认状态。', 'error');
+          return;
+        }
+        setTimeout(probe, 1000);
+      });
+    };
+    // 先等一会儿再探测，给 systemd 留出重启的时间
+    setTimeout(probe, 1500);
+  }
+
   /* ---------- 事件绑定 ---------- */
+
+  el.updateBtn.addEventListener('click', openUpdateDialog);
+  el.updateClose.addEventListener('click', function () { el.updateDialog.close(); });
+  el.updateCancel.addEventListener('click', function () { el.updateDialog.close(); });
+  el.updateApply.addEventListener('click', applyUpdate);
+  // 更新进行中禁止用 Esc 关闭，避免让人误以为更新被取消
+  el.updateDialog.addEventListener('cancel', function (event) {
+    if (state.updateRunning) { event.preventDefault(); }
+  });
+  el.updateDialog.addEventListener('close', stopUpdatePolling);
 
   el.refresh.addEventListener('click', function () {
     load().then(function () { toast('已刷新'); });
@@ -443,5 +645,6 @@
     loadLog();
   });
 
+  initUpdate();
   load();
 })();

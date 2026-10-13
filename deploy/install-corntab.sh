@@ -280,6 +280,9 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=@ENV_FILE@
 ExecStart=@BIN_PATH@ --token ${CRONTABUI_TOKEN} --bind @BIND@ --port @PORT@ --log-dir @LOG_DIR@ --data-dir @DATA_DIR@ --mem-limit @MEM@ @USER_ARG@
+
+# 界面里的「自助更新」依赖这一项：替换二进制后程序给自己发 SIGTERM 退出，
+# 由 systemd 重新拉起新版本。删掉 Restart=always 会导致更新后服务不再自动回来。
 Restart=always
 RestartSec=3
 

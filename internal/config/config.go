@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"crontabui/internal/update"
 )
 
 const (
@@ -40,6 +42,8 @@ type Config struct {
 	CrontabBin string
 	MemLimit   int
 	SessionTTL time.Duration
+	SelfUpdate bool
+	UpdateRepo string
 	ShowVer    bool
 }
 
@@ -64,6 +68,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&cfg.CrontabBin, "crontab-bin", "crontab", "crontab 可执行文件")
 	fs.IntVar(&cfg.MemLimit, "mem-limit", defaultMemLimit, "内存上限 MiB，0 表示不限制")
 	fs.DurationVar(&cfg.SessionTTL, "session-ttl", DefaultSessionTTL, "会话滑动有效期")
+	fs.BoolVar(&cfg.SelfUpdate, "self-update", true, "启用 Web 界面内的自助更新（从 GitHub Release 下载并替换自身）")
+	fs.StringVar(&cfg.UpdateRepo, "update-repo", update.DefaultRepo, "自助更新使用的 GitHub 仓库（owner/name）")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "打印版本后退出")
 
 	if err := fs.Parse(args); err != nil {
@@ -105,6 +111,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = defaultDataDir()
+	}
+	if cfg.SelfUpdate && cfg.UpdateRepo != "" && !update.ValidRepo(cfg.UpdateRepo) {
+		return nil, fmt.Errorf("--update-repo 值 %q 无效：应为 owner/name 形式", cfg.UpdateRepo)
 	}
 	return cfg, nil
 }

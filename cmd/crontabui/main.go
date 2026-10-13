@@ -21,6 +21,7 @@ import (
 	"crontabui/internal/config"
 	"crontabui/internal/crontab"
 	"crontabui/internal/logview"
+	"crontabui/internal/update"
 	"crontabui/internal/web"
 )
 
@@ -66,6 +67,22 @@ func run() error {
 	store := crontab.NewStore(crontab.NewExecRunner(cfg.CrontabBin, cfg.User), logDir, cfg.DataDir)
 	authManager := auth.New(cfg.Token, cfg.SessionTTL)
 
+	// 声明成接口类型，未启用时就是 nil 接口，避免「非空接口包着空指针」的经典陷阱
+	var updater update.Updater
+	if cfg.SelfUpdate && cfg.UpdateRepo != "" {
+		mgr, err := update.New(update.Config{
+			Repo:    cfg.UpdateRepo,
+			Current: version,
+			Logger:  logger,
+		})
+		if err != nil {
+			// 自助更新只是便利功能，初始化失败不该连累服务启动
+			logger.Warn("自助更新初始化失败，已跳过", "err", err)
+		} else {
+			updater = mgr
+		}
+	}
+
 	server, err := web.New(web.Options{
 		Token:   cfg.Token,
 		Version: version,
@@ -75,6 +92,7 @@ func run() error {
 		FindLog: func() *logview.Source { return detectSystemLog(cfg.CronLog) },
 		Exec:    makeExec(logDir),
 		Logger:  logger,
+		Updater: updater,
 	})
 	if err != nil {
 		return err
@@ -198,7 +216,8 @@ func printBanner(cfg *config.Config, logDir string) {
   备份目录   %s/backups
   crontab    %s
   内存上限   %s
-`, version, cfg.Addr(), logDir, cfg.DataDir, cfg.CrontabBin, memLimitLabel(cfg.MemLimit))
+  自助更新   %s
+`, version, cfg.Addr(), logDir, cfg.DataDir, cfg.CrontabBin, memLimitLabel(cfg.MemLimit), updateLabel(cfg))
 
 	if cfg.Bind != "127.0.0.1" && cfg.Bind != "::1" && cfg.Bind != "localhost" {
 		fmt.Printf("\n  ⚠  当前监听 %s，服务将暴露到网络。请务必通过反向代理启用 HTTPS 后再对外提供服务。\n", cfg.Bind)
@@ -211,4 +230,11 @@ func memLimitLabel(mib int) string {
 		return "不限制"
 	}
 	return fmt.Sprintf("%d MiB", mib)
+}
+
+func updateLabel(cfg *config.Config) string {
+	if !cfg.SelfUpdate || cfg.UpdateRepo == "" {
+		return "已关闭"
+	}
+	return fmt.Sprintf("已启用（%s / %s）", cfg.UpdateRepo, update.Platform())
 }
